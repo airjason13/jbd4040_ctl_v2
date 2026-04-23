@@ -1,9 +1,23 @@
 import sys
 import time
-
+from pathlib import Path
+from global_def import *
 from gpio_device import GPIOController
 from i2c_device import I2CDevice
 from gamma import *
+from pathlib import Path
+
+
+def get_oe_params_folder_path():
+    # 取得目前檔案的絕對路徑
+    current_file = Path(__file__).resolve()
+
+    # 取得該檔案所在的資料夾路徑
+    oe_dir_path = current_file.parent / "oe_params"
+
+    log.debug(f"oe_dir_path: {oe_dir_path}")
+    return oe_dir_path
+
 
 class JBD4040:
     red_i2c_sa = 0x59
@@ -34,40 +48,136 @@ class JBD4040:
     }
 
     def __init__(self, _gpio_chip_path='/dev/gpiochip0', _i2c_bus=0 ):
-        self.gpio_chip_path = _gpio_chip_path
-        self.i2c_bus = _i2c_bus
-        print(f"self.i2c_bus: {self.i2c_bus}")
-        # step.1 get gpio controller first
-        self.gpio_ctrl = None
-        self.gpio_ctrl = self.get_gpio_ctrl()
+        if platform.machine() == 'x86_64':
+            self.gpio_chip_path = _gpio_chip_path
+            self.i2c_bus = _i2c_bus
 
-        if self.gpio_ctrl is None:
-            print("Cannot get gpio ctrl! Exit!")
-            sys.exit()
+            # step.1 get gpio controller first
+            self.gpio_ctrl = None
 
-        # step.2 get smbus2 controller
-        self.red_i2c_device = I2CDevice(self.i2c_bus, self.red_i2c_sa)
-        self.green_i2c_device = I2CDevice(self.i2c_bus, self.green_i2c_sa)
-        self.blue_i2c_device = I2CDevice(self.i2c_bus, self.blue_i2c_sa)
-        self.all_i2c_device = I2CDevice(self.i2c_bus, self.all_i2c_sa)
-        print(f"self.all_i2c_device bus :{self.all_i2c_device.bus}")
-        print(f"self.all_i2c_device address :{self.all_i2c_device.address}")
-        self.rgb_devices = [
-            (self.red_i2c_device, "Red"),
-            (self.green_i2c_device, "Green"),
-            (self.blue_i2c_device, "Blue")
+            # get smbus2 controller
+            self.red_i2c_device = None
+            self.green_i2c_device = None
+            self.blue_i2c_device = None
+            self.all_i2c_device = None
+
+            self.rgb_devices = [
+                (self.red_i2c_device, "Red"),
+                (self.green_i2c_device, "Green"),
+                (self.blue_i2c_device, "Blue")
+            ]
+        else:
+            self.gpio_chip_path = _gpio_chip_path
+            self.i2c_bus = _i2c_bus
+
+            # step.1 get gpio controller first
+            self.gpio_ctrl = None
+            self.gpio_ctrl = self.get_gpio_ctrl()
+
+            if self.gpio_ctrl is None:
+                log.error("Cannot get gpio ctrl! Exit!")
+                sys.exit()
+
+            # get smbus2 controller
+            self.red_i2c_device = I2CDevice(self.i2c_bus, self.red_i2c_sa)
+            self.green_i2c_device = I2CDevice(self.i2c_bus, self.green_i2c_sa)
+            self.blue_i2c_device = I2CDevice(self.i2c_bus, self.blue_i2c_sa)
+            self.all_i2c_device = I2CDevice(self.i2c_bus, self.all_i2c_sa)
+            print(f"self.all_i2c_device bus :{self.all_i2c_device.bus}")
+            print(f"self.all_i2c_device address :{self.all_i2c_device.address}")
+            self.rgb_devices = [
+                (self.red_i2c_device, "Red"),
+                (self.green_i2c_device, "Green"),
+                (self.blue_i2c_device, "Blue")
+            ]
+
+        oe_params_path = get_oe_params_folder_path()
+
+        # sysfs nodes
+        self.sysfs_luminance = oe_params_path / "luminance"
+        self.sysfs_current = oe_params_path / "current"
+        self.sysfs_temperature = oe_params_path / "temperature"
+        self.sysfs_flip = oe_params_path / "flip"
+        self.sysfs_mirror = oe_params_path / "mirror"
+        self.sysfs_offset = oe_params_path / "offset"
+        self.oe_params_paths = [
+            self.sysfs_luminance,
+            self.sysfs_current,
+            self.sysfs_temperature,
+            self.sysfs_flip,
+            self.sysfs_mirror,
+            self.sysfs_offset,
         ]
+        self.check_oe_params_exist()
+
+        # get persist path
+        # persist folder
+        self.path_persist = Path(PERSIST_CONFIG_URI_PATH)
+        self.path_persist.mkdir(parents=True, exist_ok=True)
+
+        # persist files
+        self.path_lumin_r = self.path_persist / "persis_le_lumin_r"
+        self.path_lumin_g = self.path_persist / "persis_le_lumin_g"
+        self.path_lumin_b = self.path_persist / "persis_le_lumin_b"
+
+        self.path_current_r = self.path_persist / "persis_le_current_r"
+        self.path_current_g = self.path_persist / "persis_le_current_g"
+        self.path_current_b = self.path_persist / "persis_le_current_b"
+
+        self.path_flip = self.path_persist / "persis_le_flip"
+        self.path_mirror = self.path_persist / "persis_le_mirror"
+
+        self.path_offset_r = self.path_persist / "persis_le_offset_r"
+        self.path_offset_g = self.path_persist / "persis_le_offset_g"
+        self.path_offset_b = self.path_persist / "persis_le_offset_b"
+
+        self.path_persist_params = [
+            self.path_lumin_r,
+            self.path_lumin_g,
+            self.path_lumin_b,
+
+            self.path_current_r,
+            self.path_current_g,
+            self.path_current_b,
+
+            self.path_flip,
+            self.path_mirror,
+
+            self.path_offset_r,
+            self.path_offset_g,
+            self.path_offset_b,
+        ]
+
+    def check_persist_params_exist(self):
+        for p in self.path_persist_params:
+            if not p.exists():
+                p.touch(exist_ok=True)
+
+    def write_oe_params_with_persist_params(self):
+        log.warn("Should check params content later")
+
+    def 
+
+    def check_oe_params_exist(self):
+        for p in self.oe_params_paths:
+            if not p.exists():
+                p.touch(exist_ok=True)
+
+    def get_oe_params_paths_with_list_str(self) ->list[str]:
+        return list(map(str, self.oe_params_paths))
 
     def get_gpio_ctrl(self):
         ctrl = GPIOController(chip_path=self.gpio_chip_path, pins=self.lines)
         ret = ctrl.init_gpio()
         if ret != 0:
-            print("Exit with gpio init")
+            log.error("Exit with gpio init")
             return None
         return ctrl
 
-
     def power_on_seq_jbd4040(self):
+        if platform.machine() == 'x86_64':
+            log.debug(f"x84_64 platform power_on_seq_jbd4040")
+            return
         print('power_seq_jbd4040')
         self.gpio_ctrl.set_multiple_levels({self.lines_map.get("DVDD"): False,
                                   self.lines_map.get("VDDI"): False,
@@ -92,6 +202,9 @@ class JBD4040:
         self.gpio_ctrl.set_level(self.lines_map.get("RESET"), True)
 
     def init_registers(self):
+        if platform.machine() == 'x86_64':
+            log.debug(f"x84_64 platform init_registers")
+            return
         # --- Interrupt Mask Registers ---
         self.all_i2c_device.write_32bit_data(0x201044, 0x0000ffff)
         self.all_i2c_device.write_32bit_data(0x20104c, 0x0000ffff)
@@ -178,6 +291,9 @@ class JBD4040:
         return True
 
     def turn_on_panel(self):
+        if platform.machine() == 'x86_64':
+            log.debug(f"x84_64 platform turn_on_panel")
+            return
         time.sleep(2)
         self.gpio_ctrl.set_level(self.lines_map.get("AVEE"), True)
 
@@ -234,6 +350,9 @@ class JBD4040:
 
 
     def turn_off_mipi_dsi_output(self):
+        if platform.machine() == 'x86_64':
+            log.debug(f"x84_64 platform turn_off_mipi_dsi_output")
+            return
         target_path = "/sys/class/drm/card0-DSI-1/status"
 
         # 使用 Python 原生寫入，這等同於 shell 的 echo off > ...
@@ -249,6 +368,9 @@ class JBD4040:
         print(f"turn_off_mipi_dsi_output status: {status}")
 
     def turn_on_mipi_dsi_output(self):
+        if platform.machine() == 'x86_64':
+            log.debug(f"x84_64 platform turn_on_mipi_dsi_output")
+            return
         target_path = "/sys/class/drm/card0-DSI-1/status"
 
         # 使用 Python 原生寫入，這等同於 shell 的 echo off > ...
@@ -262,3 +384,89 @@ class JBD4040:
             status = f.read().strip()
 
         print(f"turn_off_mipi_dsi_output status: {status}")
+
+    def _touch_if_missing(self, path: Path) -> None:
+        try:
+            if not path.exists():
+                path.touch()
+        except Exception as e:
+            log.warning(f"[LE] touch failed {path}: {e}")
+
+    def _safe_read(self, path: Path) -> str:
+        try:
+            return path.read_text().strip()
+        except Exception:
+            return ""
+
+    def _safe_write(self, path: Path, text: str) -> bool:
+        """
+        write sysfs. return True if wrote, False if skipped/failed
+        """
+        try:
+            if not path.exists():
+                return False
+            path.write_text(text)
+            return True
+        except Exception as e:
+            log.warning(f"[LE] write failed {path}: {e}")
+            return False
+
+    # -------------------------
+    # Restore / Persist helpers
+    # -------------------------
+    def restore_all(self) -> None:
+        # ensure persist files exist
+        for p in [
+            self.path_lumin_r, self.path_lumin_g, self.path_lumin_b,
+            self.path_current_r, self.path_current_g, self.path_current_b,
+            self.path_flip, self.path_mirror,
+            self.path_offset_r, self.path_offset_g, self.path_offset_b,
+        ]:
+            self._touch_if_missing(p)
+
+        # brightness restore
+        self._restore_simple_rgb(self.path_lumin_r, self.sysfs_luminance, "r")
+        self._restore_simple_rgb(self.path_lumin_g, self.sysfs_luminance, "g")
+        self._restore_simple_rgb(self.path_lumin_b, self.sysfs_luminance, "b")
+
+        # current restore
+        self._restore_simple_rgb(self.path_current_r, self.sysfs_current, "r")
+        self._restore_simple_rgb(self.path_current_g, self.sysfs_current, "g")
+        self._restore_simple_rgb(self.path_current_b, self.sysfs_current, "b")
+
+        # flip / mirror restore
+        self._restore_flag(self.path_flip, self.sysfs_flip)
+        self._restore_flag(self.path_mirror, self.sysfs_mirror)
+
+        # offset restore
+        self._restore_offset(self.path_offset_r, self.sysfs_offset, "r")
+        self._restore_offset(self.path_offset_g, self.sysfs_offset, "g")
+        self._restore_offset(self.path_offset_b, self.sysfs_offset, "b")
+
+    def _restore_simple_rgb(self, persist: Path, sysfs: Path, ch: str) -> None:
+        value = self._safe_read(persist)
+        if not value:
+            return
+        self._safe_write(sysfs, f"{ch} {value}")
+
+    def _restore_flag(self, persist: Path, sysfs: Path) -> None:
+        # sysfs may not exist on some build -> skip
+        if not sysfs.exists():
+            return
+        value = self._safe_read(persist)
+        if value not in ("0", "1"):
+            return
+        self._safe_write(sysfs, f"r {value}")
+
+    def _restore_offset(self, persist: Path, sysfs: Path, ch: str) -> None:
+        if not sysfs.exists():
+            return
+        value = self._safe_read(persist)
+        if not value:
+            return
+        try:
+            en, h, v = [x.strip() for x in value.split(",", 2)]
+        except ValueError:
+            return
+        if en and h and v:
+            self._safe_write(sysfs, f"{ch} {en} {h} {v}")
