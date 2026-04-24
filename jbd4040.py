@@ -148,6 +148,12 @@ class JBD4040:
             self.path_offset_b,
         ]
 
+        # 檢查預設參數檔案是否存在,不存在直接建立
+        self.check_persist_params_exist()
+
+        # 將persist params 寫入 oe params
+        self.write_oe_params_with_persist_params()
+
     def check_persist_params_exist(self):
         for p in self.path_persist_params:
             if not p.exists():
@@ -156,7 +162,7 @@ class JBD4040:
     def write_oe_params_with_persist_params(self):
         log.warn("Should check params content later")
 
-    def 
+
 
     def check_oe_params_exist(self):
         for p in self.oe_params_paths:
