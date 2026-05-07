@@ -1,3 +1,5 @@
+import platform
+import re
 import sys
 import time
 from pathlib import Path
@@ -6,6 +8,8 @@ from gpio_device import GPIOController
 from i2c_device import I2CDevice
 from gamma import *
 from pathlib import Path
+
+from mock_i2c_device import MockI2CDevice
 
 
 def get_oe_params_folder_path():
@@ -29,6 +33,12 @@ class JBD4040:
     GREEN_PANEL_TAG = 'Green'
     BLUE_PANEL_TAG = 'Blue'
     ALL_PANEL_TAG = 'All'
+
+    RGB_PANEL_TAG_LIST = [
+        RED_PANEL_TAG,
+        GREEN_PANEL_TAG,
+        BLUE_PANEL_TAG,
+        ALL_PANEL_TAG]
 
     panels_i2c_sa_map = {
         'Red': 0x59,
@@ -56,16 +66,23 @@ class JBD4040:
             self.gpio_ctrl = None
 
             # get smbus2 controller
-            self.red_i2c_device = None
-            self.green_i2c_device = None
-            self.blue_i2c_device = None
-            self.all_i2c_device = None
+            self.red_i2c_device = MockI2CDevice(self.i2c_bus, self.red_i2c_sa)
+            self.green_i2c_device = MockI2CDevice(self.i2c_bus, self.green_i2c_sa)
+            self.blue_i2c_device = MockI2CDevice(self.i2c_bus, self.blue_i2c_sa)
+            self.all_i2c_device = MockI2CDevice(self.i2c_bus, self.all_i2c_sa)
 
             self.rgb_devices = [
                 (self.red_i2c_device, "Red"),
                 (self.green_i2c_device, "Green"),
                 (self.blue_i2c_device, "Blue")
             ]
+
+            self.rgb_devices_map = {
+                "Red": self.red_i2c_device,
+                "Green": self.green_i2c_device,
+                "Blue": self.blue_i2c_device
+            }
+
         else:
             self.gpio_chip_path = _gpio_chip_path
             self.i2c_bus = _i2c_bus
@@ -90,6 +107,12 @@ class JBD4040:
                 (self.green_i2c_device, "Green"),
                 (self.blue_i2c_device, "Blue")
             ]
+
+            self.rgb_devices_map = {
+                "Red": self.red_i2c_device,
+                "Green": self.green_i2c_device,
+                "Blue": self.blue_i2c_device
+            }
 
         oe_params_path = get_oe_params_folder_path()
 
@@ -151,17 +174,13 @@ class JBD4040:
         # 檢查預設參數檔案是否存在,不存在直接建立
         self.check_persist_params_exist()
 
-        # 將persist params 寫入 oe params
-        self.write_oe_params_with_persist_params()
+
+
 
     def check_persist_params_exist(self):
         for p in self.path_persist_params:
             if not p.exists():
                 p.touch(exist_ok=True)
-
-    def write_oe_params_with_persist_params(self):
-        log.warn("Should check params content later")
-
 
 
     def check_oe_params_exist(self):
@@ -206,6 +225,24 @@ class JBD4040:
         self.gpio_ctrl.set_level(self.lines_map.get("RESET"), False)
         time.sleep(0.01)
         self.gpio_ctrl.set_level(self.lines_map.get("RESET"), True)
+
+    def power_off_seq_jbd4040(self):
+        if platform.machine() == 'x86_64':
+            log.debug(f"x84_64 platform power_on_seq_jbd4040")
+            return
+
+
+
+        time.sleep(0.01)
+        self.gpio_ctrl.set_level(self.lines_map.get("VDDI"), False)
+
+        # time.sleep(0.01)
+        self.gpio_ctrl.set_level(self.lines_map.get("AVDD"), False)
+
+        time.sleep(0.01)
+        self.gpio_ctrl.set_level(self.lines_map.get("DVDD"), False)
+
+
 
     def init_registers(self):
         if platform.machine() == 'x86_64':
@@ -279,6 +316,59 @@ class JBD4040:
         self.green_i2c_device.write_16bit_data(0x20020e, 0x0001)
         self.blue_i2c_device.write_16bit_data(0x20020e, 0x0000)
 
+    def test_luminance_current(self):
+        self.all_i2c_device.write_16bit_data(0x200a14, 0x200)
+        self.red_i2c_device.write_16bit_data(0x200100, 0x5a)
+        self.green_i2c_device.write_16bit_data(0x200100, 0x32)
+        self.blue_i2c_device.write_16bit_data(0x200100, 0x19)
+
+    def read_fmc_register_range(self):
+        """
+        讀取從 0x200c00 到 0x200c28 的 16-bit 暫存器資料
+        """
+        if platform.machine() == 'x86_64':
+            log.debug("x84_64 平台跳過暫存器讀取")
+            return
+
+        start_addr = 0x200c00
+        end_addr = 0x200c28
+
+        print(f"--- 開始讀取暫存器範圍: {hex(start_addr)} 到 {hex(end_addr)} ---")
+
+        # 使用 range(start, stop, step)，stop 需 +2 以包含 0x200c28
+        for addr in range(start_addr, end_addr + 2, 2):
+            try:
+                data = self.all_i2c_device.read_16bit_data(addr)
+                print(f"Address: {hex(addr)} | Data: {hex(data)}")
+            except Exception as e:
+                print(f"讀取位址 {hex(addr)} 失敗: {e}")
+
+        print("--- 讀取完成 ---")
+
+    def read_efuse_register_range(self):
+        """
+        讀取從 0x200c00 到 0x200c28 的 16-bit 暫存器資料
+        """
+        if platform.machine() == 'x86_64':
+            log.debug("x84_64 平台跳過暫存器讀取")
+            return
+
+        start_addr = 0x200d00
+        end_addr = 0x200d42
+
+        print(f"--- 開始讀取暫存器範圍: {hex(start_addr)} 到 {hex(end_addr)} ---")
+
+        # 使用 range(start, stop, step)，stop 需 +2 以包含 0x200c28
+        for addr in range(start_addr, end_addr + 2, 2):
+            try:
+                data = self.all_i2c_device.read_16bit_data(addr)
+                print(f"Address: {hex(addr)} | Data: {hex(data)}")
+            except Exception as e:
+                print(f"讀取位址 {hex(addr)} 失敗: {e}")
+
+        print("--- 讀取完成 ---")
+
+
     def update_panel_gamma(self, device, name):
         print(f"正在寫入 {name} 面板 Gamma LUT...")
         for index, val in enumerate(gamma_2_2_data):
@@ -302,6 +392,13 @@ class JBD4040:
             return
         time.sleep(2)
         self.gpio_ctrl.set_level(self.lines_map.get("AVEE"), True)
+
+    def turn_off_panel(self):
+        if platform.machine() == 'x86_64':
+            log.debug(f"x84_64 platform turn_on_panel")
+            return
+        time.sleep(2)
+        self.gpio_ctrl.set_level(self.lines_map.get("AVEE"), False)
 
     def get_panel_temp(self, color_tag):
         for dev, name in self.rgb_devices:
@@ -420,7 +517,7 @@ class JBD4040:
     # -------------------------
     # Restore / Persist helpers
     # -------------------------
-    def restore_all(self) -> None:
+    def write_oe_params_with_persist_params(self) -> None:
         # ensure persist files exist
         for p in [
             self.path_lumin_r, self.path_lumin_g, self.path_lumin_b,
@@ -476,3 +573,214 @@ class JBD4040:
             return
         if en and h and v:
             self._safe_write(sysfs, f"{ch} {en} {h} {v}")
+
+    def parse_panels_luminance(self, r_reg_value: str, g_reg_value: str, b_reg_value: str) -> str:
+        '''
+        :param reg_value: str type, decimal
+        :return: R: $r_luminance
+                 G: $g_luminance
+                 B: $b_luminance
+        '''
+        r_luminance = int(r_reg_value, 0)
+        g_luminance = int(g_reg_value, 0)
+        b_luminance = int(b_reg_value, 0)
+        ret_str = f"R:{r_luminance}\nG:{g_luminance}\nB:{b_luminance}"
+        return ret_str
+
+    def _read_luminance_from_register(self, color_tag: str) -> str:
+        dev = self.rgb_devices_map.get(color_tag)
+        if not dev:
+            return "0"
+        return str(dev.read_16bit_data(0x200a14))
+
+    def parse_panels_current(self, r_reg_value: str, g_reg_value: str, b_reg_value: str) -> str:
+        '''
+        :param reg_value: str type, decimal
+        :return: R: $r_current
+                 G: $g_current
+                 B: $b_current
+        '''
+        r_current = int(r_reg_value, 0)
+        g_current = int(g_reg_value, 0)
+        b_current = int(b_reg_value, 0)
+
+        ret_str = f"R:{r_current}\nG:{g_current}\nB:{b_current}"
+        return ret_str
+
+    def _read_current_from_register(self, color_tag: str) -> str:
+        dev = self.rgb_devices_map.get(color_tag)
+        if not dev:
+            return "0"
+        return str(dev.read_16bit_data(0x200100))
+
+    def parse_panels_offset(self, enable: bool, r_reg_value: str, g_reg_value: str, b_reg_value: str) -> str:
+        '''
+        :param reg_value: str type, decimal
+        :return: R($enabled): H:$r_x_offset, V:$r_y_offset
+                 G($enabled): H:$g_x_offset, V:$g_y_offset
+                 B($enabled): H:$b_x_offset, V:$b_y_offset
+        '''
+
+        r_total_offset = int(r_reg_value, 0)
+        r_x_offset = (r_total_offset >> 8) & 0x1F
+        r_y_offset = (r_total_offset) & 0x1F
+
+        g_total_offset = int(g_reg_value, 0)
+        g_x_offset = (g_total_offset >> 8) & 0x1F
+        g_y_offset = (g_total_offset) & 0x1F
+
+        b_total_offset = int(b_reg_value, 0)
+        b_x_offset = (b_total_offset >> 8) & 0x1F
+        b_y_offset = (b_total_offset) & 0x1F
+
+        enabled = "enabled" if enable else "disabled"
+
+        ret_str = (f"R({enabled}) H:{r_x_offset} V:{r_y_offset}\n"
+                   f"G({enabled}) H:{g_x_offset} V:{g_y_offset}\n"
+                   f"B({enabled})H:{b_x_offset} V:{b_y_offset}")
+        return ret_str
+
+
+    def parse_single_panel_offset(self, reg_value: str) -> str:
+        '''
+        :param reg_value: str type, decimal
+        :return: H:$x_offset, V:$y_offset
+
+        x_offset = reg_value[12:8], range[0,20]
+        y_offset = reg_value[4:0], range[0,12]
+        '''
+        total_offset = int(reg_value, 0)
+        x_offset = (total_offset >> 8) & 0x1F
+        y_offset = (total_offset) & 0x1F
+
+        ret_str = f"H:{x_offset:02}, V:{y_offset:02}"
+        return ret_str
+
+
+
+    def _read_offset_from_register(self, color_tag: str) -> str:
+        dev = self.rgb_devices_map.get(color_tag)
+        if not dev:
+            return "0"
+
+        return str(dev.read_16bit_data(0x200a24))
+
+    def oe_params_current_changed(self):
+        '''
+        :return:None
+        read the new current value and write direct to the register
+        '''
+        rgb_data = {}
+        # 定義正規表達式：匹配 字母(R/G/B) + 冒號 + 數字
+        pattern = re.compile(r'([RGB]):\s*(\d+)')
+
+        try:
+            with open(self.sysfs_current, 'r', encoding='utf-8') as f:
+                content = f.read()
+                # 尋找所有匹配項
+                matches = pattern.findall(content)
+
+                # 將結果轉換為字典，例如 {'R': 512, 'G': 512, 'B': 512}
+                rgb_data = {key: int(value) for key, value in matches}
+
+                r_current = rgb_data.get('R')
+                g_current = rgb_data.get('G')
+                b_current = rgb_data.get('B')
+                log.debug(f"r_current: {r_current}, g_current: {g_current}, b_current: {b_current}")
+
+
+                self.red_i2c_device.write_16bit_data(0x200100, r_current)
+                self.path_current_r.write_text(str(r_current))
+                self.green_i2c_device.write_16bit_data(0x200100, g_current)
+                self.path_current_g.write_text(str(g_current))
+                self.blue_i2c_device.write_16bit_data(0x200100, b_current)
+                self.path_current_b.write_text(str(b_current))
+        except FileNotFoundError:
+            log.error("錯誤：找不到檔案")
+        except Exception as e:
+            log.error(f"發生意外錯誤: {e}")
+
+    def oe_params_luminance_changed(self):
+        '''
+        :return:None
+        read the new current value and write direct to the register
+        '''
+        rgb_data = {}
+        # 定義正規表達式：匹配 字母(R/G/B) + 冒號 + 數字
+        pattern = re.compile(r'([RGB]):\s*(\d+)')
+
+        try:
+            with open(self.sysfs_current, 'r', encoding='utf-8') as f:
+                content = f.read()
+                # 尋找所有匹配項
+                matches = pattern.findall(content)
+
+                # 將結果轉換為字典，例如 {'R': 512, 'G': 512, 'B': 512}
+                rgb_data = {key: int(value) for key, value in matches}
+
+                r_luminance = rgb_data.get('R')
+                g_luminance = rgb_data.get('G')
+                b_luminance = rgb_data.get('B')
+                log.debug(f"r_luminance: {r_luminance},g_luminance: {g_luminance}, b_luminance: {b_luminance}")
+
+                if platform.machine() == 'x86_64':
+                    pass
+                else:
+                    self.red_i2c_device.write_16bit_data(0x200a14, r_luminance)
+                    self.path_lumin_r.write_text(str(r_luminance))
+                    self.green_i2c_device.write_16bit_data(0x200a14, g_luminance)
+                    self.path_lumin_g.write_text(str(g_luminance))
+                    self.blue_i2c_device.write_16bit_data(0x200a14, b_luminance)
+                    self.path_lumin_b.write_text(str(b_luminance))
+        except FileNotFoundError:
+            print("錯誤：找不到檔案")
+        except Exception as e:
+            print(f"發生意外錯誤: {e}")
+
+    def oe_params_offset_changed(self):
+        offsets = {}
+        # 正規表達式解析：
+        # ([RGB])          -> 捕捉顏色標籤
+        # \((\w+)\)        -> 捕捉括號內的狀態 (enabled/disabled)
+        # \s*H:(\d+)\s*V:(\d+) -> 捕捉 H 和 V 後面跟著的數字
+        pattern = re.compile(r'([RGB])\((\w+)\)\s*H:(\d+)\s*V:(\d+)')
+
+        try:
+            with open(self.sysfs_offset, 'r', encoding='utf-8') as f:
+                content = f.read()
+                for match in pattern.finditer(content):
+                    color, status, h_val, v_val = match.groups()
+                    offsets[color] = {
+                        'status': status,
+                        'H': int(h_val),
+                        'V': int(v_val)
+                    }
+        except FileNotFoundError:
+            print(f"錯誤：找不到檔案 {self.sysfs_offset}")
+        except Exception as e:
+            print(f"解析時發生意外錯誤: {e}")
+
+        for color, vals in offsets.items():
+            # 根據你的 parse_panels_offset 邏輯：
+            # H 位移在 bit[12:8]，V 位移在 bit[4:0]
+            reg_value = (vals['H'] << 8) | (vals['V'])
+            # 取得對應的 I2C 設備並寫入 0x200a24
+            dev = self.rgb_devices_map.get(color)
+            if dev and platform.machine() != 'x86_64':
+                dev.write_16bit_data(0x200a24, reg_value)
+            if color == 'R':
+                self.path_offset_r.write_text(str(reg_value))
+            elif color == 'G':
+                self.path_offset_g.write_text(str(reg_value))
+            elif color == 'B':
+                self.path_offset_b.write_text(str(reg_value))
+
+            log.debug(f"Updated {color} Offset: {hex(reg_value)}")
+
+
+    def oe_params_flip_changed(self):
+        log.warn("Not Implemented yet")
+
+    def oe_params_mirror_changed(self):
+        log.warn("Not Implemented yet")
+

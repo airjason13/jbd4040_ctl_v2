@@ -42,23 +42,77 @@ def main():
         jbd4040.turn_off_mipi_dsi_output()
         time.sleep(1)
         jbd4040.power_on_seq_jbd4040()
-        time.sleep(2)
+        time.sleep(1)
         jbd4040.init_registers()
-        time.sleep(2)
+        time.sleep(1)
+        jbd4040.write_oe_params_with_persist_params()
+        
         jbd4040.turn_on_panel()
-        time.sleep(2)
+        time.sleep(1)
         jbd4040.turn_on_mipi_dsi_output()
+
+        if platform.machine() == 'x86_64':
+            pass
+        else:
+            jbd4040.test_luminance_current()
+
+            jbd4040.read_fmc_register_range()
+            log.debug("########################################################")
+            jbd4040.read_efuse_register_range()
 
         # 設定想要監控的檔案路徑（可以是多個）
         target_files = jbd4040.get_oe_params_paths_with_list_str()
 
         # 初始化監控物件
         monitor = OEParamsMonitor(target_files)
+        monitor.install_slots(jbd4040.oe_params_current_changed,
+                              jbd4040.oe_params_luminance_changed,
+                              jbd4040.oe_params_offset_changed,
+                              jbd4040.oe_params_flip_changed,
+                              jbd4040.oe_params_mirror_changed)
 
         log.debug("檔案監控服務已啟動...")
 
-        # 進入事件循環，程式會在這裡持續執行直到 app.quit() 被呼叫
-        # sys.exit(app.exec_())
+        '''
+        TEST Start
+        '''
+        if platform.machine() == 'x86_64':
+            pass
+        else:
+            # 測試讀取luminance/current
+            for panel_tag in jbd4040.RGB_PANEL_TAG_LIST:
+                log.debug(f"pantl_tag: {panel_tag}")
+                log.debug(f"luminance of {panel_tag} : {jbd4040._read_luminance_from_register(panel_tag)}")
+
+            luminance_file_str = jbd4040.parse_panels_luminance(
+                jbd4040._read_luminance_from_register(jbd4040.RGB_PANEL_TAG_LIST[0]),
+                jbd4040._read_luminance_from_register(jbd4040.RGB_PANEL_TAG_LIST[1]),
+                jbd4040._read_luminance_from_register(jbd4040.RGB_PANEL_TAG_LIST[2]))
+            log.debug(f" parse liminance : {luminance_file_str}")
+
+            for panel_tag in jbd4040.RGB_PANEL_TAG_LIST:
+                log.debug(f"luminance of {panel_tag} : {jbd4040._read_current_from_register(panel_tag)}")
+
+            current_file_str = jbd4040.parse_panels_current(
+                jbd4040._read_luminance_from_register(jbd4040.RGB_PANEL_TAG_LIST[0]),
+                jbd4040._read_luminance_from_register(jbd4040.RGB_PANEL_TAG_LIST[1]),
+                jbd4040._read_luminance_from_register(jbd4040.RGB_PANEL_TAG_LIST[2]))
+            log.debug(f" parse current : {current_file_str}")
+
+            for panel_tag in jbd4040.RGB_PANEL_TAG_LIST:
+                log.debug(f"offset of {panel_tag} : {jbd4040.parse_single_panel_offset(jbd4040._read_offset_from_register(panel_tag))}")
+
+            offset_file_str = jbd4040.parse_panels_offset(
+                True,
+                jbd4040._read_offset_from_register(jbd4040.RGB_PANEL_TAG_LIST[0]),
+                jbd4040._read_offset_from_register(jbd4040.RGB_PANEL_TAG_LIST[0]),
+                jbd4040._read_offset_from_register(jbd4040.RGB_PANEL_TAG_LIST[0]))
+            log.debug(f" parse offset : {offset_file_str}")
+        '''
+        TEST End
+        '''
+
+
         app.exec_()
     except Exception as e:
         # 【新增】捕捉其他所有未預期的錯誤
@@ -72,6 +126,7 @@ def main():
             log.debug("正在關閉硬體輸出與電源...")
             # 這裡可以放你的關機/清理邏輯，避免硬體卡在不穩定的狀態
             try:
+                jbd4040.turn_off_panel()
                 jbd4040.power_off_seq_jbd4040()
                 jbd4040.turn_off_mipi_dsi_output()
             except Exception as cleanup_error:
