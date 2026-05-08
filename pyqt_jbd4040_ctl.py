@@ -12,7 +12,7 @@ from oe_params_monitor import OEParamsMonitor
 
 
 def main():
-    log.debug("Welcome to JBD4040 ctl v2")
+    log.debug(f"Welcome to JBD4040 ctl {Version}")
     # 使用 Non-GUI 的核心應用程式
     app = QCoreApplication(sys.argv)
 
@@ -45,7 +45,8 @@ def main():
         time.sleep(1)
         jbd4040.init_registers()
         time.sleep(1)
-        jbd4040.write_oe_params_with_persist_params()
+        jbd4040.init_sysfs_from_register()
+        # jbd4040.write_oe_params_with_persist_params()
         
         jbd4040.turn_on_panel()
         time.sleep(1)
@@ -55,7 +56,6 @@ def main():
             pass
         else:
             jbd4040.test_luminance_current()
-
             jbd4040.read_fmc_register_range()
             log.debug("########################################################")
             jbd4040.read_efuse_register_range()
@@ -72,6 +72,8 @@ def main():
                               jbd4040.oe_params_mirror_changed)
 
         log.debug("檔案監控服務已啟動...")
+
+        jbd4040.sync_oe_params_with_persist_params()
 
         '''
         TEST Start

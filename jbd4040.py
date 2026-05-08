@@ -1,8 +1,13 @@
+import os
 import platform
 import re
 import sys
 import time
 from pathlib import Path
+import random
+
+from PyQt5.QtCore import QTimer
+
 from global_def import *
 from gpio_device import GPIOController
 from i2c_device import I2CDevice
@@ -56,6 +61,22 @@ class JBD4040:
         "AVEE": 26,
         "RESET": 21
     }
+
+    R_LUMINANCE_DEFAULT_VALUE = 512
+    G_LUMINANCE_DEFAULT_VALUE = 512
+    B_LUMINANCE_DEFAULT_VALUE = 512
+
+    R_CURRENT_DEFAULT_VALUE = 50
+    G_CURRENT_DEFAULT_VALUE = 50
+    B_CURRENT_DEFAULT_VALUE = 50
+
+    R_H_OFFSET_DEFAULT_VALUE = 10
+    G_H_OFFSET_DEFAULT_VALUE = 10
+    B_H_OFFSET_DEFAULT_VALUE = 10
+
+    R_V_OFFSET_DEFAULT_VALUE = 6
+    G_V_OFFSET_DEFAULT_VALUE = 6
+    B_V_OFFSET_DEFAULT_VALUE = 6
 
     def __init__(self, _gpio_chip_path='/dev/gpiochip0', _i2c_bus=0 ):
         if platform.machine() == 'x86_64':
@@ -114,24 +135,7 @@ class JBD4040:
                 "Blue": self.blue_i2c_device
             }
 
-        oe_params_path = get_oe_params_folder_path()
 
-        # sysfs nodes
-        self.sysfs_luminance = oe_params_path / "luminance"
-        self.sysfs_current = oe_params_path / "current"
-        self.sysfs_temperature = oe_params_path / "temperature"
-        self.sysfs_flip = oe_params_path / "flip"
-        self.sysfs_mirror = oe_params_path / "mirror"
-        self.sysfs_offset = oe_params_path / "offset"
-        self.oe_params_paths = [
-            self.sysfs_luminance,
-            self.sysfs_current,
-            self.sysfs_temperature,
-            self.sysfs_flip,
-            self.sysfs_mirror,
-            self.sysfs_offset,
-        ]
-        self.check_oe_params_exist()
 
         # get persist path
         # persist folder
@@ -172,21 +176,41 @@ class JBD4040:
         ]
 
         # 檢查預設參數檔案是否存在,不存在直接建立
-        self.check_persist_params_exist()
+        self.init_persist_params()
 
+        # 檢查fake sysfs
+        oe_params_path = get_oe_params_folder_path()
 
+        # sysfs nodes
+        self.sysfs_luminance = oe_params_path / "luminance"
+        self.sysfs_current = oe_params_path / "current"
+        self.sysfs_temperature = oe_params_path / "temperature"
+        self.sysfs_flip = oe_params_path / "flip"
+        self.sysfs_mirror = oe_params_path / "mirror"
+        self.sysfs_offset = oe_params_path / "offset"
+        self.oe_params_paths = [
+            self.sysfs_luminance,
+            self.sysfs_current,
+            # self.sysfs_temperature, # Do not monitor temperature
+            self.sysfs_flip,
+            self.sysfs_mirror,
+            self.sysfs_offset,
+        ]
+        self.check_oe_params_exist()
 
+        # Timer inside controller
+        self.temperature_timer = QTimer()
+        self.temperature_timer.setInterval(2)
+        self.temperature_timer.timeout.connect(self.get_panels_max_temperature_and_sync_sysfs)
 
-    def check_persist_params_exist(self):
-        for p in self.path_persist_params:
-            if not p.exists():
-                p.touch(exist_ok=True)
-
+        QTimer.singleShot(0, self.temperature_timer.start)
 
     def check_oe_params_exist(self):
         for p in self.oe_params_paths:
             if not p.exists():
                 p.touch(exist_ok=True)
+
+
 
     def get_oe_params_paths_with_list_str(self) ->list[str]:
         return list(map(str, self.oe_params_paths))
@@ -230,9 +254,6 @@ class JBD4040:
         if platform.machine() == 'x86_64':
             log.debug(f"x84_64 platform power_on_seq_jbd4040")
             return
-
-
-
         time.sleep(0.01)
         self.gpio_ctrl.set_level(self.lines_map.get("VDDI"), False)
 
@@ -305,18 +326,14 @@ class JBD4040:
         # --- Frame Sync ---
         self.all_i2c_device.write_16bit_data(0x200a04, 0x000f)  # self refresh enable + frame sync [cite: 12]
 
-        '''self.red_i2c_device.write_16bit_data(0x200100, 0x005a)  # pixel current ori 0x32
-        self.green_i2c_device.write_16bit_data(0x200100, 0x0041)  # pixel current ori 0x32
-        self.blue_i2c_device.write_16bit_data(0x200100, 0x0041)  # pixel current ori 0x32
-        self.red_i2c_device.write_16bit_data(0x200a14, 0x01f4)  # lumi 0x1388
-        self.green_i2c_device.write_16bit_data(0x200a14, 0xfa)  # lumi 0x1388
-        self.blue_i2c_device.write_16bit_data(0x200a14, 0x7d)  # lumi 0x1388'''
-
         self.red_i2c_device.write_16bit_data(0x20020e, 0x0000)
         self.green_i2c_device.write_16bit_data(0x20020e, 0x0001)
         self.blue_i2c_device.write_16bit_data(0x20020e, 0x0000)
 
+
     def test_luminance_current(self):
+        log.debug("Do not use this function!")
+        pass
         self.all_i2c_device.write_16bit_data(0x200a14, 0x200)
         self.red_i2c_device.write_16bit_data(0x200100, 0x5a)
         self.green_i2c_device.write_16bit_data(0x200100, 0x32)
@@ -400,7 +417,32 @@ class JBD4040:
         time.sleep(2)
         self.gpio_ctrl.set_level(self.lines_map.get("AVEE"), False)
 
+    def get_panels_max_temperature_and_sync_sysfs(self):
+        panels_temp = {}
+        for dev, name in self.rgb_devices:
+            dev.write_16bit_data(0x200402, 0x0003)
+
+            temp_ctrl = dev.read_16bit_data(0x200402)
+            if platform.machine() == 'x86_64':
+                raw_val = random.uniform(10, 50)
+                result = f"{raw_val:.3f}"
+                panels_temp[name] = result
+            else:
+                time.sleep(1)
+                if temp_ctrl == 0x0003:
+                    temp_register_value = dev.read_16bit_data(0x200404)
+                    temp_val = self.calculate_temperature(temp_register_value)
+                    if temp_val is not None:
+                        print(f"{name} 計算出的溫度: {temp_val:.2f} °C")
+                        panels_temp[name] = temp_val
+                dev.write_16bit_data(0x200402, 0x0000)
+
+        max_temp_val = max(panels_temp.values())
+        self.sysfs_temperature.write_text(str(max_temp_val))
+        os.sync()
+
     def get_panel_temp(self, color_tag):
+        panel_temp = {}
         for dev, name in self.rgb_devices:
             if name == color_tag:
                 dev.write_16bit_data(0x200402, 0x0003)
@@ -414,8 +456,8 @@ class JBD4040:
                     if temp_val is not None:
                         # print(f"Red temp_register_value: {temp_register_value:#x}")
                         print(f"{name} 計算出的溫度: {temp_val:.2f} °C")
+                        panel_temp[name] = temp_val
                 dev.write_16bit_data(0x200402, 0x0000)
-
 
 
     def calculate_temperature(self, reg_value):
@@ -517,7 +559,126 @@ class JBD4040:
     # -------------------------
     # Restore / Persist helpers
     # -------------------------
-    def write_oe_params_with_persist_params(self) -> None:
+    def init_persist_params(self):
+        # handle luminance
+        for p in [
+            self.path_lumin_r, self.path_lumin_g, self.path_lumin_b,
+        ]:
+            if not p.exists():
+                self._touch_if_missing(p)
+                if 'r'.lower() in p.name.lower():
+                    p.write_text(str(self.R_LUMINANCE_DEFAULT_VALUE))
+                elif 'g'.lower() in p.name.lower():
+                    p.write_text(str(self.G_LUMINANCE_DEFAULT_VALUE))
+                elif 'b'.lower() in p.name.lower():
+                    p.write_text(str(self.B_LUMINANCE_DEFAULT_VALUE))
+                with open(p, 'r+') as f:
+                    os.fsync(f.fileno())
+        # handle current
+        for p in [
+            self.path_current_r, self.path_current_g, self.path_current_b,
+        ]:
+            if not p.exists():
+                self._touch_if_missing(p)
+                if 'r'.lower() in p.name.lower():
+                    p.write_text(str(self.R_CURRENT_DEFAULT_VALUE))
+                elif 'g'.lower() in p.name.lower():
+                    p.write_text(str(self.G_CURRENT_DEFAULT_VALUE))
+                elif 'b'.lower() in p.name.lower():
+                    p.write_text(str(self.B_CURRENT_DEFAULT_VALUE))
+                with open(p, 'r+') as f:
+                    os.fsync(f.fileno())
+
+        # handle offset
+        for p in [
+            self.path_offset_r, self.path_offset_g, self.path_offset_b,
+        ]:
+            if not p.exists():
+                self._touch_if_missing(p)
+                if 'r'.lower() in p.name.lower():
+                    r_offset_str = f"1,{self.R_H_OFFSET_DEFAULT_VALUE},{self.R_V_OFFSET_DEFAULT_VALUE}"
+                    p.write_text(r_offset_str)
+                elif 'g'.lower() in p.name.lower():
+                    g_offset_str = f"1,{self.G_H_OFFSET_DEFAULT_VALUE},{self.G_V_OFFSET_DEFAULT_VALUE}"
+                    p.write_text(g_offset_str)
+                elif 'b'.lower() in p.name.lower():
+                    b_offset_str = f"1,{self.B_H_OFFSET_DEFAULT_VALUE},{self.B_V_OFFSET_DEFAULT_VALUE}"
+                    p.write_text(b_offset_str)
+                with open(p, 'r+') as f:
+                    os.fsync(f.fileno())
+
+        os.sync()
+
+    def sync_oe_current_with_persist(self) -> None:
+        current_map = {}
+        for p in [
+            self.path_current_r, self.path_current_g, self.path_current_b,
+        ]:
+            content = p.read_text().strip()
+            # 取得檔名最後一個字母作為 Key (r, g, b)
+            key = p.name.split('_')[-1]
+            current_map[key] = content
+        log.debug(f"sync_oe_current_with_persist: {current_map}")
+        target_oe_params_current_str = (f"R:{current_map.get('r')}\n"
+                                        f"G:{current_map.get('g')}\n"
+                                        f"B:{current_map.get('b')}")
+        self.sysfs_current.write_text(target_oe_params_current_str)
+
+    def sync_oe_luminance_with_persist(self) -> None:
+        luminance_map = {}
+        for p in [
+            self.path_lumin_r, self.path_lumin_g, self.path_lumin_b,
+        ]:
+            content = p.read_text().strip()
+            # 取得檔名最後一個字母作為 Key (r, g, b)
+            key = p.name.split('_')[-1]
+            luminance_map[key] = content
+        log.debug(f"sync_oe_luminance_with_persist: {luminance_map}")
+        target_oe_params_luminance_str = (f"R:{luminance_map.get('r')}\n"
+                                        f"G:{luminance_map.get('g')}\n"
+                                        f"B:{luminance_map.get('b')}")
+        self.sysfs_luminance.write_text(target_oe_params_luminance_str)
+
+    def sync_oe_offset_with_persist(self) -> None:
+        offset_map = {}
+        for p in [
+            self.path_offset_r, self.path_offset_g, self.path_offset_b,
+        ]:
+            raw_data = p.read_text().strip().split(',')
+
+            # 取得結尾字母作為 Key (r, g, b)
+            key = p.name.split('_')[-1]
+
+            # 存成巢狀字典，方便後續調用
+            offset_map[key] = {
+                'enable': 'enabled' if raw_data[0] == '1' else 'disabled',
+                'x_offset': raw_data[1],
+                'v_offset': raw_data[2]
+            }
+        color_names = {'r': 'R', 'g': 'G', 'b': 'B'}
+        result_lines = []
+        # 按照 R, G, B 的順序處理 (確保輸出順序固定)
+        for c_key in ['r', 'g', 'b']:
+            if c_key in offset_map:
+                vals = offset_map[c_key]
+                # 依照格式組合成字串
+                # R(enabled) H:16 V:11
+                line = f"{color_names[c_key]}({vals['enable']}) H:{vals['x_offset']} V:{vals['v_offset']}"
+                result_lines.append(line)
+
+        # 將列表用換行符號連接起來
+        target_oe_params_offset_str = "\n".join(result_lines)
+
+        self.sysfs_offset.write_text(target_oe_params_offset_str)
+
+    def sync_oe_params_with_persist_params(self) -> None:
+        self.sync_oe_current_with_persist()
+        self.sync_oe_luminance_with_persist()
+        self.sync_oe_offset_with_persist()
+        log.debug("mirror/flip are not implemented")
+
+
+    def write_oe_params_with_persist_params_dep(self) -> None:
         # ensure persist files exist
         for p in [
             self.path_lumin_r, self.path_lumin_g, self.path_lumin_b,
@@ -637,7 +798,7 @@ class JBD4040:
 
         ret_str = (f"R({enabled}) H:{r_x_offset} V:{r_y_offset}\n"
                    f"G({enabled}) H:{g_x_offset} V:{g_y_offset}\n"
-                   f"B({enabled})H:{b_x_offset} V:{b_y_offset}")
+                   f"B({enabled}) H:{b_x_offset} V:{b_y_offset}")
         return ret_str
 
 
@@ -710,7 +871,7 @@ class JBD4040:
         pattern = re.compile(r'([RGB]):\s*(\d+)')
 
         try:
-            with open(self.sysfs_current, 'r', encoding='utf-8') as f:
+            with open(self.sysfs_luminance, 'r', encoding='utf-8') as f:
                 content = f.read()
                 # 尋找所有匹配項
                 matches = pattern.findall(content)
@@ -769,14 +930,22 @@ class JBD4040:
             if dev and platform.machine() != 'x86_64':
                 dev.write_16bit_data(0x200a24, reg_value)
             if color == 'R':
-                self.path_offset_r.write_text(str(reg_value))
+                r_offset_persist_str = f"1,{offsets[color]['H']},{offsets[color]['V']}"
+                if "disable" in offsets[color]['status']:
+                    r_offset_persist_str = f"0,{offsets[color]['H']},{offsets[color]['V']}"
+                self.path_offset_r.write_text(r_offset_persist_str)
             elif color == 'G':
-                self.path_offset_g.write_text(str(reg_value))
+                g_offset_persist_str = f"1,{offsets[color]['H']},{offsets[color]['V']}"
+                if "disable" in offsets[color]['status']:
+                    g_offset_persist_str = f"0,{offsets[color]['H']},{offsets[color]['V']}"
+                self.path_offset_g.write_text(g_offset_persist_str)
             elif color == 'B':
-                self.path_offset_b.write_text(str(reg_value))
+                b_offset_persist_str = f"1,{offsets[color]['H']},{offsets[color]['V']}"
+                if "disable" in offsets[color]['status']:
+                    b_offset_persist_str = f"0,{offsets[color]['H']},{offsets[color]['V']}"
+                self.path_offset_b.write_text(b_offset_persist_str)
 
             log.debug(f"Updated {color} Offset: {hex(reg_value)}")
-
 
     def oe_params_flip_changed(self):
         log.warn("Not Implemented yet")
@@ -784,3 +953,27 @@ class JBD4040:
     def oe_params_mirror_changed(self):
         log.warn("Not Implemented yet")
 
+    def init_sysfs_from_register(self):
+        # handle the offset
+        target_sysfs_offset_str = self.parse_panels_offset(True,
+                                                           self._read_offset_from_register(self.RED_PANEL_TAG),
+                                                           self._read_offset_from_register(self.GREEN_PANEL_TAG),
+                                                           self._read_offset_from_register(self.BLUE_PANEL_TAG))
+        log.debug(f"target_sysfs_offset_str: {target_sysfs_offset_str}")
+        self._safe_write(self.sysfs_offset, target_sysfs_offset_str)
+
+        #handle the current
+        target_sysfs_current_str = self.parse_panels_current(self._read_current_from_register(self.RED_PANEL_TAG),
+                                                             self._read_current_from_register(self.GREEN_PANEL_TAG),
+                                                             self._read_current_from_register(self.BLUE_PANEL_TAG))
+        log.debug(f"target_sysfs_current_str: {target_sysfs_current_str}")
+        self._safe_write(self.sysfs_current, target_sysfs_current_str)
+
+        # handle the luminance
+        target_sysfs_luminance_str = self.parse_panels_luminance(self._read_luminance_from_register(self.RED_PANEL_TAG),
+                                                                 self._read_luminance_from_register(self.GREEN_PANEL_TAG),
+                                                                 self._read_luminance_from_register(self.BLUE_PANEL_TAG))
+        log.debug(f"target_sysfs_luminance: {target_sysfs_luminance_str}")
+        self._safe_write(self.sysfs_luminance, target_sysfs_luminance_str)
+
+        log.debug("flip and mirror need to be implemented")

@@ -1,6 +1,7 @@
 import utils.log_utils
 import getpass
 import platform
+from version import Version
 log = utils.log_utils.logging_init(__file__, "jbd4040_ctl_v2.log")
 
 
