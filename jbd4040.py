@@ -564,8 +564,12 @@ class JBD4040:
         for p in [
             self.path_lumin_r, self.path_lumin_g, self.path_lumin_b,
         ]:
-            if not p.exists():
+            log.debug(f"init_persist_params luminance: {p}")
+            log.debug(f"init_persist_params luminance _safe_read: {self._safe_read(p)}")
+            log.debug(f"init_persist_params luminance read_text: {p.read_text()}")
+            if not p.exists() or self._safe_read(p) == '':
                 self._touch_if_missing(p)
+                log.debug("init_persist_params luminance")
                 if 'r'.lower() in p.name.lower():
                     p.write_text(str(self.R_LUMINANCE_DEFAULT_VALUE))
                 elif 'g'.lower() in p.name.lower():
@@ -578,7 +582,8 @@ class JBD4040:
         for p in [
             self.path_current_r, self.path_current_g, self.path_current_b,
         ]:
-            if not p.exists():
+            log.debug(f"init_persist_params current: {p}")
+            if not p.exists() or self._safe_read(p) == '':
                 self._touch_if_missing(p)
                 if 'r'.lower() in p.name.lower():
                     p.write_text(str(self.R_CURRENT_DEFAULT_VALUE))
@@ -593,7 +598,8 @@ class JBD4040:
         for p in [
             self.path_offset_r, self.path_offset_g, self.path_offset_b,
         ]:
-            if not p.exists():
+            log.debug(f"init_persist_params offset: {p}")
+            if not p.exists() or self._safe_read(p) == '':
                 self._touch_if_missing(p)
                 if 'r'.lower() in p.name.lower():
                     r_offset_str = f"1,{self.R_H_OFFSET_DEFAULT_VALUE},{self.R_V_OFFSET_DEFAULT_VALUE}"

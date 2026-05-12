@@ -55,10 +55,11 @@ def main():
         if platform.machine() == 'x86_64':
             pass
         else:
-            jbd4040.test_luminance_current()
+            pass
+            '''jbd4040.test_luminance_current()
             jbd4040.read_fmc_register_range()
             log.debug("########################################################")
-            jbd4040.read_efuse_register_range()
+            jbd4040.read_efuse_register_range()'''
 
         # 設定想要監控的檔案路徑（可以是多個）
         target_files = jbd4040.get_oe_params_paths_with_list_str()
