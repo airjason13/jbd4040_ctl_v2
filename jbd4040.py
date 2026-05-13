@@ -626,6 +626,22 @@ class JBD4040:
                 with open(p, 'r+') as f:
                     os.fsync(f.fileno())
 
+        for p in [
+            self.path_flip,
+        ]:
+            log.debug(f"init_persist_params flip: {p}")
+            if not p.exists() or self._safe_read(p) == '':
+                self._touch_if_missing(p)
+                p.write_text("0")
+
+        for p in [
+            self.path_mirror,
+        ]:
+            log.debug(f"init_persist_params mirror: {p}")
+            if not p.exists() or self._safe_read(p) == '':
+                self._touch_if_missing(p)
+                p.write_text("0")
+
         os.sync()
 
     def sync_oe_current_with_persist(self) -> None:
@@ -690,11 +706,25 @@ class JBD4040:
 
         self.sysfs_offset.write_text(target_oe_params_offset_str)
 
+    def sync_oe_flip_with_persist(self) -> None:
+        if self._safe_read(self.path_flip) == '1':
+            self.sysfs_flip.write_text("Flip is Enabled")
+        else:
+            self.sysfs_flip.write_text("Flip is Disabled")
+
+    def sync_oe_mirror_with_persist(self) -> None:
+        if self._safe_read(self.path_mirror) == '1':
+            self.sysfs_mirror.write_text("Mirror is Enabled")
+        else:
+            self.sysfs_mirror.write_text("Mirror is Disabled")
+
     def sync_oe_params_with_persist_params(self) -> None:
         self.sync_oe_current_with_persist()
         self.sync_oe_luminance_with_persist()
         self.sync_oe_offset_with_persist()
-        log.debug("mirror/flip are not implemented")
+        self.sync_oe_flip_with_persist()
+        self.sync_oe_mirror_with_persist()
+
 
 
     def write_oe_params_with_persist_params_dep(self) -> None:
@@ -836,6 +866,18 @@ class JBD4040:
         ret_str = f"H:{x_offset:02}, V:{y_offset:02}"
         return ret_str
 
+    def _read_flip_from_register(self, color_tag: str) -> str:
+        dev = self.rgb_devices_map.get(color_tag)
+        if not dev:
+            return "0"
+        return str(dev.read_16bit_data(0x20020e))
+
+    def read_rgb_flip_register(self):
+        panel_flip_register = {}
+        for color, dev in self.rgb_devices_map.items():
+            if color == self.RED_PANEL_TAG:
+                panel_flip_register[color] = dev.read_16bit_data(0x20020e)
+        return panel_flip_register
 
 
     def _read_offset_from_register(self, color_tag: str) -> str:
@@ -972,10 +1014,20 @@ class JBD4040:
             log.debug(f"Updated {color} Offset: {hex(reg_value)}")
 
     def oe_params_flip_changed(self):
-        log.warn("Not Implemented yet")
+        if "Enable" in self._safe_read(self.sysfs_flip):
+            log.debug("Flip: Enable, Need to write register to flip")
+            self.path_flip.write_text("1")
+        else:
+            log.debug("Flip: Disable, Need to write register to flip")
+            self.path_flip.write_text("0")
 
     def oe_params_mirror_changed(self):
-        log.warn("Not Implemented yet")
+        if "Enable" in self._safe_read(self.sysfs_mirror):
+            log.debug("Mirror: Enable, Need to write register to flip")
+            self.path_mirror.write_text("1")
+        else:
+            log.debug("Mirror: Disable, Need to write register to flip")
+            self.path_mirror.write_text("0")
 
     def init_sysfs_from_register(self):
         # handle the offset
