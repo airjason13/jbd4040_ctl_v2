@@ -27,6 +27,14 @@ def get_oe_params_folder_path():
     log.debug(f"oe_dir_path: {oe_dir_path}")
     return oe_dir_path
 
+def safe_int(val, use_round=True):
+    try:
+        # 先確保是 float (處理字串或數值)，再進行四捨五入或截斷
+        num = float(val)
+        return round(num) if use_round else int(num)
+    except (TypeError, ValueError):
+        return 0  # 若讀取失敗或為 None，回傳 0
+
 
 class JBD4040:
     red_i2c_sa = 0x59
@@ -121,8 +129,8 @@ class JBD4040:
             self.green_i2c_device = I2CDevice(self.i2c_bus, self.green_i2c_sa)
             self.blue_i2c_device = I2CDevice(self.i2c_bus, self.blue_i2c_sa)
             self.all_i2c_device = I2CDevice(self.i2c_bus, self.all_i2c_sa)
-            print(f"self.all_i2c_device bus :{self.all_i2c_device.bus}")
-            print(f"self.all_i2c_device address :{self.all_i2c_device.address}")
+            log.debug(f"self.all_i2c_device bus :{self.all_i2c_device.bus}")
+            log.debug(f"self.all_i2c_device address :{self.all_i2c_device.address}")
             self.rgb_devices = [
                 (self.red_i2c_device, "Red"),
                 (self.green_i2c_device, "Green"),
@@ -434,11 +442,16 @@ class JBD4040:
                     temp_val = self.calculate_temperature(temp_register_value)
                     if temp_val is not None:
                         print(f"{name} 計算出的溫度: {temp_val:.2f} °C")
+
                         panels_temp[name] = temp_val
                 dev.write_16bit_data(0x200402, 0x0000)
 
-        max_temp_val = max(panels_temp.values())
-        self.sysfs_temperature.write_text(str(max_temp_val))
+        target_temp_str = (
+            f"R: {safe_int(panels_temp.get(self.RED_PANEL_TAG))}\n"
+            f"G: {safe_int(panels_temp.get(self.GREEN_PANEL_TAG))}\n"
+            f"B: {safe_int(panels_temp.get(self.BLUE_PANEL_TAG))}"
+        )
+        self.sysfs_temperature.write_text(str(target_temp_str))
         os.sync()
 
     def get_panel_temp(self, color_tag):
@@ -669,7 +682,7 @@ class JBD4040:
                 vals = offset_map[c_key]
                 # 依照格式組合成字串
                 # R(enabled) H:16 V:11
-                line = f"{color_names[c_key]}({vals['enable']}) H:{vals['x_offset']} V:{vals['v_offset']}"
+                line = f"{color_names[c_key]}({vals['enable']}) H:{vals['x_offset']}, V:{vals['v_offset']}"
                 result_lines.append(line)
 
         # 將列表用換行符號連接起來
@@ -802,9 +815,9 @@ class JBD4040:
 
         enabled = "enabled" if enable else "disabled"
 
-        ret_str = (f"R({enabled}) H:{r_x_offset} V:{r_y_offset}\n"
-                   f"G({enabled}) H:{g_x_offset} V:{g_y_offset}\n"
-                   f"B({enabled}) H:{b_x_offset} V:{b_y_offset}")
+        ret_str = (f"R({enabled}) H:{r_x_offset}, V:{r_y_offset}\n"
+                   f"G({enabled}) H:{g_x_offset}, V:{g_y_offset}\n"
+                   f"B({enabled}) H:{b_x_offset}, V:{b_y_offset}")
         return ret_str
 
 
@@ -900,17 +913,21 @@ class JBD4040:
                     self.blue_i2c_device.write_16bit_data(0x200a14, b_luminance)
                     self.path_lumin_b.write_text(str(b_luminance))
         except FileNotFoundError:
-            print("錯誤：找不到檔案")
+            log.debug("錯誤：找不到檔案")
         except Exception as e:
-            print(f"發生意外錯誤: {e}")
+            log.debug(f"發生意外錯誤: {e}")
 
     def oe_params_offset_changed(self):
+        log.debug("oe_params_offset_changed called")
         offsets = {}
         # 正規表達式解析：
         # ([RGB])          -> 捕捉顏色標籤
         # \((\w+)\)        -> 捕捉括號內的狀態 (enabled/disabled)
         # \s*H:(\d+)\s*V:(\d+) -> 捕捉 H 和 V 後面跟著的數字
-        pattern = re.compile(r'([RGB])\((\w+)\)\s*H:(\d+)\s*V:(\d+)')
+        # pattern = re.compile(r'([RGB])\((\w+)\)\s*H:(\d+)\s*V:(\d+)')
+        pattern = re.compile(
+            r"([RGB])\((enable|disable|enabled|disabled)\)\s*H:\s*(\d+),?\s*V:\s*(\d+)"
+        )
 
         try:
             with open(self.sysfs_offset, 'r', encoding='utf-8') as f:
@@ -923,15 +940,16 @@ class JBD4040:
                         'V': int(v_val)
                     }
         except FileNotFoundError:
-            print(f"錯誤：找不到檔案 {self.sysfs_offset}")
+            log.debug(f"錯誤：找不到檔案 {self.sysfs_offset}")
         except Exception as e:
-            print(f"解析時發生意外錯誤: {e}")
-
+            log.debug(f"解析時發生意外錯誤: {e}")
+        log.debug(f"offsets: {offsets}")
         for color, vals in offsets.items():
             # 根據你的 parse_panels_offset 邏輯：
             # H 位移在 bit[12:8]，V 位移在 bit[4:0]
             reg_value = (vals['H'] << 8) | (vals['V'])
             # 取得對應的 I2C 設備並寫入 0x200a24
+            log.debug(f"color: {color}")
             dev = self.rgb_devices_map.get(color)
             if dev and platform.machine() != 'x86_64':
                 dev.write_16bit_data(0x200a24, reg_value)

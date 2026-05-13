@@ -79,7 +79,7 @@ def main():
         '''
         TEST Start
         '''
-        if platform.machine() == 'x86_64':
+        '''if platform.machine() == 'x86_64':
             pass
         else:
             # 測試讀取luminance/current
@@ -110,7 +110,7 @@ def main():
                 jbd4040._read_offset_from_register(jbd4040.RGB_PANEL_TAG_LIST[0]),
                 jbd4040._read_offset_from_register(jbd4040.RGB_PANEL_TAG_LIST[0]),
                 jbd4040._read_offset_from_register(jbd4040.RGB_PANEL_TAG_LIST[0]))
-            log.debug(f" parse offset : {offset_file_str}")
+            log.debug(f" parse offset : {offset_file_str}")'''
         '''
         TEST End
         '''
